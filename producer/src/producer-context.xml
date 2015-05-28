@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	   xmlns:beans="http://www.springframework.org/schema/beans"
+	   xmlns:context="http://www.springframework.org/schema/context"
+	   xmlns:int="http://www.springframework.org/schema/integration"
+	   xmlns:int-jms="http://www.springframework.org/schema/integration/jms"
+	   xsi:schemaLocation="http://www.springframework.org/schema/beans
+	   					   http://www.springframework.org/schema/beans/spring-beans.xsd
+						   http://www.springframework.org/schema/context
+						   http://www.springframework.org/schema/context/spring-context.xsd
+						   http://www.springframework.org/schema/integration
+						   http://www.springframework.org/schema/integration/spring-integration.xsd
+						   http://www.springframework.org/schema/integration/jms
+						   http://www.springframework.org/schema/integration/jms/spring-integration-jms.xsd">
+
+
+	<context:component-scan base-package="am.workfront.producer"/>
+
+	<bean id="eventHeader" class="am.workfront.event.header.EventHeader"/>
+
+	<int:logging-channel-adapter id="error-logger"   logger-name="General" log-full-message="true" level="ERROR"/>
+	<int:logging-channel-adapter id="tracker-logger" logger-name="Tracker" log-full-message="true" level="INFO"/>
+
+	<int:channel id="eventChannel">
+		<int:interceptors>
+			<int:wire-tap channel="tracker-logger"/>
+		</int:interceptors>
+	</int:channel>
+
+	<int:channel id="queueChannel">
+		<int:queue capacity="25"/>
+	</int:channel>
+
+	<int:gateway id="messageGateway"
+				 service-interface="am.workfront.producer.gateway.MessageGateway"
+				 default-request-channel="eventChannel"
+				 error-channel="error-logger"/>
+
+	<int:chain input-channel="eventChannel">
+
+		<int:header-enricher>
+			<int:header name="destination" method="enrichHeader" ref="eventHeader"/>
+		</int:header-enricher>
+
+		<int:transformer method="serialize">
+			<bean class="am.workfront.event.transformer.JsonMessageTransformer"/>
+		</int:transformer>
+
+		<int-jms:outbound-channel-adapter
+			connection-factory="eventConnectionFactory"
+			destination-expression="headers.destination"
+			pub-sub-domain="true"/>
+
+	</int:chain>
+
+	<!--<int:service-activator input-channel="eventChannel" requires-reply="false"-->
+						   <!--output-channel="eventChannel" expression="payload.content.contains('sms')">-->
+		<!--<int:request-handler-advice-chain>-->
+			<!--<bean class="am.workfront.producer.HandlerAdviceChain">-->
+				<!--<property name="returnFailureExpressionResult" value="true"/>-->
+				<!--<property name="onFailureExpression" value="#exception instanceof T (java.lang.Exception) ? #exception : null"/>-->
+				<!--<property name="failureChannel" ref="error-logger"/>-->
+			<!--</bean>-->
+		<!--</int:request-handler-advice-chain>-->
+	<!--</int:service-activator>-->
+
+	<bean id="eventConnectionFactory" class="org.apache.activemq.pool.PooledConnectionFactory" destroy-method="stop">
+		<property name="connectionFactory">
+			<bean class="org.apache.activemq.ActiveMQConnectionFactory">
+				<property name="brokerURL" value="tcp://localhost:61616"/>
+				<property name="sendTimeout" value="5000"/>
+			</bean>
+		</property>
+	</bean>
+
+	<bean id="transactionManager" class="org.springframework.jms.connection.JmsTransactionManager">
+		<property name="connectionFactory" ref="eventConnectionFactory"/>
+		<property name="nestedTransactionAllowed" value="false"/>
+	</bean>
+
+</beans>

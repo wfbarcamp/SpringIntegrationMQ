@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	   xmlns:beans="http://www.springframework.org/schema/beans"
+	   xmlns:context="http://www.springframework.org/schema/context"
+	   xmlns:int="http://www.springframework.org/schema/integration"
+	   xmlns:int-jms="http://www.springframework.org/schema/integration/jms"
+	   xsi:schemaLocation="http://www.springframework.org/schema/beans
+	   					   http://www.springframework.org/schema/beans/spring-beans.xsd
+						   http://www.springframework.org/schema/context
+						   http://www.springframework.org/schema/context/spring-context.xsd
+						   http://www.springframework.org/schema/integration
+						   http://www.springframework.org/schema/integration/spring-integration.xsd
+						   http://www.springframework.org/schema/integration/jms
+						   http://www.springframework.org/schema/integration/jms/spring-integration-jms.xsd">
+
+
+	<context:component-scan base-package="am.workfront.consumer"/>
+
+	<int:annotation-config/>
+
+	<context:annotation-config/>
+
+	<int:logging-channel-adapter id="error-logger"   logger-name="General" log-full-message="true" level="ERROR"/>
+	<int:logging-channel-adapter id="tracker-logger" logger-name="Tracker" log-full-message="true" level="INFO"/>
+
+	<int:channel id="messageChannel">
+		<int:interceptors>
+			<int:wire-tap channel="tracker-logger"/>
+		</int:interceptors>
+	</int:channel>
+
+	<int:channel id="messageOutputChannel"/>
+
+	<int-jms:message-driven-channel-adapter connection-factory="eventConnectionFactory"
+											transaction-manager="transactionManager"
+											destination-name="VirtualTopic.message.event"
+											channel="messageChannel"
+											error-channel="error-logger"
+											pub-sub-domain="true"/>
+
+	<int:chain input-channel="messageChannel" output-channel="messageOutputChannel">
+
+		<int:transformer method="transform">
+			<bean class="am.workfront.event.transformer.JsonMessageTransformer">
+				<property name="objectClass" value="am.workfront.event.MessageEvent"/>
+			</bean>
+		</int:transformer>
+
+		<int:filter ref="messageEventFilter"/>
+
+		<int:transformer ref="messageEventEnricher"/>
+
+	</int:chain>
+
+	<int:router input-channel="messageOutputChannel" expression="payload.event.type">
+		<int:mapping value="ALL" channel="allChannels"/>
+		<int:mapping value="CHAT" channel="chatChannel"/>
+		<int:mapping value="EMAIL" channel="emailChannel"/>
+		<int:mapping value="SMS" channel="smsChannel"/>
+	</int:router>
+
+	<int:channel id="allChannels"/>
+
+	<int:recipient-list-router input-channel="allChannels">
+		<int:recipient channel="chatChannel"/>
+		<int:recipient channel="emailChannel"/>
+		<int:recipient channel="smsChannel"/>
+	</int:recipient-list-router>
+
+	<bean id="recipientListRouter" class="org.springframework.integration.router.RecipientListRouter">
+		<property name="channels">
+			<list>
+				<ref bean="chatChannel"/>
+				<ref bean="emailChannel"/>
+				<ref bean="smsChannel"/>
+			</list>
+		</property>
+	</bean>
+
+	<int:channel id="chatChannel"/>
+	<int-jms:outbound-channel-adapter channel="chatChannel"
+									  connection-factory="eventConnectionFactory"
+									  destination-name="ChatTransportQueue"/>
+
+	<int:channel id="emailChannel"/>
+	<int-jms:outbound-channel-adapter channel="emailChannel"
+									  connection-factory="eventConnectionFactory"
+									  destination-name="EmailTransportQueue"/>
+
+	<int:channel id="smsChannel"/>
+	<int-jms:outbound-channel-adapter channel="smsChannel"
+									  connection-factory="eventConnectionFactory"
+									  destination-name="SmsTransportQueue"/>
+
+	<bean id="eventConnectionFactory" class="org.apache.activemq.pool.PooledConnectionFactory" destroy-method="stop">
+		<property name="connectionFactory">
+			<bean class="org.apache.activemq.ActiveMQConnectionFactory">
+				<property name="brokerURL" value="tcp://localhost:61616"/>
+				<property name="sendTimeout" value="5000"/>
+			</bean>
+		</property>
+	</bean>
+
+	<bean id="transactionManager" class="org.springframework.jms.connection.JmsTransactionManager">
+		<property name="connectionFactory" ref="eventConnectionFactory"/>
+	</bean>
+
+</beans>
